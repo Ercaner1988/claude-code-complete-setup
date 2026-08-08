@@ -23,6 +23,7 @@ pub fn run_update(home_override: Option<String>) -> Result<()> {
     let claude_dir = home.join(".claude");
     let config_dir = home.join(".config").join("claude-code");
     let memory_dir = home.join("claude_global_memory");
+    let _ = memory_dir;
 
     // 1. Backups
     if claude_dir.exists() {
@@ -43,6 +44,8 @@ pub fn run_update(home_override: Option<String>) -> Result<()> {
 
     // 2. Updates
     let src_claude = current_dir.join("config").join("claude");
+    // Ensure parent exists
+    if !claude_dir.exists() { fs::create_dir_all(&claude_dir)?; }
     if src_claude.exists() {
         let mut options = CopyOptions::new();
         options.overwrite = true;
@@ -52,7 +55,9 @@ pub fn run_update(home_override: Option<String>) -> Result<()> {
     }
 
     let src_mcp_file = current_dir.join("config").join("claude-code").join("claude_desktop_config.json");
-    let dst_mcp_file = config_dir.join("claude_desktop_config.json");
+    let dst_mcp_dir = config_dir.clone();
+    if !dst_mcp_dir.exists() { fs::create_dir_all(&dst_mcp_dir)?; }
+    let dst_mcp_file = dst_mcp_dir.join("claude_desktop_config.json");
     if src_mcp_file.exists() {
         let raw = fs::read_to_string(&src_mcp_file)?;
         let normalized = mcp::normalize_mcp_config(&raw, &home)?;
