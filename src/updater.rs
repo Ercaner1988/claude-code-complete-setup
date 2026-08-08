@@ -4,7 +4,6 @@ use colored::*;
 use fs_extra::dir::{copy, CopyOptions};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 
 use crate::installer::get_home_dir;
@@ -18,7 +17,8 @@ pub fn run_update(home_override: Option<String>) -> Result<()> {
     let current_dir = env::current_dir().context("Failed to get current working directory")?;
     let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
 
-    println!("{} {}", "INFO:".blue().bold(), "Updating framework files...");
+    let info_tag = "INFO:".blue().bold();
+    println!("{} Updating framework files...", info_tag);
 
     let claude_dir = home.join(".claude");
     let config_dir = home.join(".config").join("claude-code");
@@ -45,7 +45,9 @@ pub fn run_update(home_override: Option<String>) -> Result<()> {
     // 2. Updates
     let src_claude = current_dir.join("config").join("claude");
     // Ensure parent exists
-    if !claude_dir.exists() { fs::create_dir_all(&claude_dir)?; }
+    if !claude_dir.exists() {
+        fs::create_dir_all(&claude_dir)?;
+    }
     if src_claude.exists() {
         let mut options = CopyOptions::new();
         options.overwrite = true;
@@ -54,22 +56,34 @@ pub fn run_update(home_override: Option<String>) -> Result<()> {
         println!("{} Updated SuperClaude framework", "✓".green());
     }
 
-    let src_mcp_file = current_dir.join("config").join("claude-code").join("claude_desktop_config.json");
+    let src_mcp_file = current_dir
+        .join("config")
+        .join("claude-code")
+        .join("claude_desktop_config.json");
     let dst_mcp_dir = config_dir.clone();
-    if !dst_mcp_dir.exists() { fs::create_dir_all(&dst_mcp_dir)?; }
+    if !dst_mcp_dir.exists() {
+        fs::create_dir_all(&dst_mcp_dir)?;
+    }
     let dst_mcp_file = dst_mcp_dir.join("claude_desktop_config.json");
     if src_mcp_file.exists() {
         let raw = fs::read_to_string(&src_mcp_file)?;
         let normalized = mcp::normalize_mcp_config(&raw, &home)?;
         fs::write(&dst_mcp_file, normalized)?;
-        println!("{} Updated and re-normalized MCP configurations", "✓".green());
+        println!(
+            "{} Updated and re-normalized MCP configurations",
+            "✓".green()
+        );
     }
 
-    println!("{} {}", "INFO:".blue().bold(), "Updating packages (npm/uv)...");
+    let info_tag2 = "INFO:".blue().bold();
+    println!("{} Updating packages (npm/uv)...", info_tag2);
     let mcp_projects_dir = home.join("claude-code-desktop02-setup").join("mcp-servers");
     if mcp_projects_dir.exists() {
         // npm update
-        let _ = Command::new("npm").args(["update"]).current_dir(&mcp_projects_dir).status();
+        let _ = Command::new("npm")
+            .args(["update"])
+            .current_dir(&mcp_projects_dir)
+            .status();
         println!("{} Updated npm packages", "✓".green());
     }
 

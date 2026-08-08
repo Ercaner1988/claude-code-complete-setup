@@ -35,6 +35,7 @@ yarn-error.log*
 # Rust
 target/
 **/*.db
+.fastembed_cache/
 
 # Temporary files
 *.tmp

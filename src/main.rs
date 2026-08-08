@@ -16,7 +16,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Install { skip_prereqs, home_dir } => {
+        Commands::Install {
+            skip_prereqs,
+            home_dir,
+        } => {
             installer::run_install(skip_prereqs, home_dir)?;
         }
         Commands::Update { home_dir } => {
@@ -28,11 +31,41 @@ fn main() -> Result<()> {
         Commands::McpList { home_dir } => {
             mcp::list_mcp_servers(home_dir)?;
         }
+        Commands::McpSet {
+            server,
+            command,
+            arg,
+            env,
+            home_dir,
+        } => {
+            mcp::mcp_set(&server, command, arg, env, home_dir)?;
+        }
+        Commands::McpUnset {
+            server,
+            env,
+            clear_args,
+            home_dir,
+        } => {
+            mcp::mcp_unset(&server, env, clear_args, home_dir)?;
+        }
+        Commands::McpEnable { server, home_dir } => {
+            mcp::mcp_toggle(&server, false, home_dir)?;
+        }
+        Commands::McpDisable { server, home_dir } => {
+            mcp::mcp_toggle(&server, true, home_dir)?;
+        }
         Commands::MemoryIndex { home_dir } => {
             memory_engine::index_memory(home_dir)?;
         }
-        Commands::MemorySearch { query, home_dir } => {
-            memory_engine::search_memory(&query, home_dir)?;
+        Commands::MemorySearch {
+            query,
+            mode,
+            home_dir,
+        } => {
+            memory_engine::search_memory(&query, &mode, home_dir)?;
+        }
+        Commands::MemoryRelated { note, home_dir } => {
+            memory_engine::get_related_notes(&note, home_dir)?;
         }
         Commands::InstallHooks { repo_dir } => {
             security::install_git_hooks(repo_dir)?;
@@ -40,7 +73,11 @@ fn main() -> Result<()> {
         Commands::SecurityAudit { home_dir } => {
             security::run_security_audit(home_dir)?;
         }
-        Commands::AgentWorkflow { branch_type, description, files } => {
+        Commands::AgentWorkflow {
+            branch_type,
+            description,
+            files,
+        } => {
             agent::run_agent_workflow(&branch_type, &description, &files)?;
         }
         Commands::Status => {

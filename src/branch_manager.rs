@@ -72,11 +72,18 @@ pub fn safe_commit(message: &str, files: &[String]) -> Result<()> {
 pub fn safe_push() -> Result<()> {
     let branch = get_current_branch()?;
     if is_protected_branch(&branch) {
-        anyhow::bail!("BLOCKED: Cannot push directly to protected branch '{}'", branch);
+        anyhow::bail!(
+            "BLOCKED: Cannot push directly to protected branch '{}'",
+            branch
+        );
     }
     Command::new("git")
         .args(["push", "-u", "origin", &branch])
         .status()?;
-    println!("{} Pushed branch '{}' to origin", "✓".green().bold(), branch);
+    println!(
+        "{} Pushed branch '{}' to origin",
+        "✓".green().bold(),
+        branch
+    );
     Ok(())
 }

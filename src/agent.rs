@@ -3,12 +3,11 @@ use colored::*;
 
 use crate::branch_manager;
 
-pub fn run_agent_workflow(
-    branch_type: &str,
-    description: &str,
-    files: &[String],
-) -> Result<()> {
-    println!("{}", "Autonomous Repository Agent (Rust Engine)".cyan().bold());
+pub fn run_agent_workflow(branch_type: &str, description: &str, files: &[String]) -> Result<()> {
+    println!(
+        "{}",
+        "Autonomous Repository Agent (Rust Engine)".cyan().bold()
+    );
     println!("==================================================");
 
     let branch = branch_manager::create_feature_branch(branch_type, description)?;

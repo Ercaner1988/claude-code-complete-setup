@@ -38,7 +38,11 @@ pub fn install_git_hooks(repo_dir: Option<String>) -> Result<()> {
     let git_hooks_dir = target_dir.join(".git").join("hooks");
 
     if !git_hooks_dir.exists() {
-        println!("{} Git hooks directory not found at {:?}", "✗".red(), git_hooks_dir);
+        println!(
+            "{} Git hooks directory not found at {:?}",
+            "✗".red(),
+            git_hooks_dir
+        );
         println!("Ensure this is a valid Git repository root.");
         return Ok(());
     }
@@ -70,19 +74,32 @@ pub fn run_security_audit(home_override: Option<String>) -> Result<()> {
     }
 
     // Check .config/claude-code file permissions
-    let config_file = home.join(".config").join("claude-code").join("claude_desktop_config.json");
+    let config_file = home
+        .join(".config")
+        .join("claude-code")
+        .join("claude_desktop_config.json");
     if config_file.exists() {
-        println!("{} MCP config file exists at {:?}", "✓".green(), config_file);
+        println!(
+            "{} MCP config file exists at {:?}",
+            "✓".green(),
+            config_file
+        );
     } else {
         println!("{} MCP config file not found", "✗".red());
     }
 
     // Check branch protection
-    if let Ok(output) = Command::new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).output() {
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+    {
         let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
         println!("Current Git branch: {}", branch.yellow().bold());
         if branch == "main" || branch == "master" {
-            println!("{} Working directly on main branch! Use feature branches.", "⚠".yellow());
+            println!(
+                "{} Working directly on main branch! Use feature branches.",
+                "⚠".yellow()
+            );
         }
     }
 

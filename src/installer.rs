@@ -90,7 +90,10 @@ pub fn run_install(skip_prereqs: bool, home_override: Option<String>) -> Result<
         let mut options = CopyOptions::new();
         options.copy_inside = true;
         let _ = copy(&config_dir, &backup_path, &options);
-        log_warning(&format!("Backed up claude-code config to {:?}", backup_path));
+        log_warning(&format!(
+            "Backed up claude-code config to {:?}",
+            backup_path
+        ));
     }
 
     if memory_dir.exists() {
@@ -115,7 +118,10 @@ pub fn run_install(skip_prereqs: bool, home_override: Option<String>) -> Result<
         log_success("Copied SuperClaude framework");
     }
 
-    let src_mcp_file = current_dir.join("config").join("claude-code").join("claude_desktop_config.json");
+    let src_mcp_file = current_dir
+        .join("config")
+        .join("claude-code")
+        .join("claude_desktop_config.json");
     let dst_mcp_file = config_dir.join("claude_desktop_config.json");
     if src_mcp_file.exists() {
         let raw = fs::read_to_string(&src_mcp_file)?;
@@ -141,11 +147,18 @@ pub fn run_install(skip_prereqs: bool, home_override: Option<String>) -> Result<
         fs::copy(&env_src, &env_dst)?;
         log_success("Configured .env.claude environment file");
     } else {
-        log_warning("No .env file found in repository root. Copy .env.example to .env to set up secrets.");
+        log_warning(
+            "No .env file found in repository root. Copy .env.example to .env to set up secrets.",
+        );
     }
 
     println!("========================================");
-    println!("{}", "✅ Setup completed successfully via Rust engine!".green().bold());
+    println!(
+        "{}",
+        "✅ Setup completed successfully via Rust engine!"
+            .green()
+            .bold()
+    );
 
     Ok(())
 }
