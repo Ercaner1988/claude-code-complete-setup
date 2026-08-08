@@ -32,6 +32,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Rust
+target/
+**/*.db
+
 # Temporary files
 *.tmp
 *.temp
