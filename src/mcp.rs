@@ -14,7 +14,7 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
-    pub env: BTreeMap<String, String>,
+    pub env: BTreeMap<String, Value>, // Value destekli env
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -43,7 +43,7 @@ pub fn normalize_mcp_config(
             if let Some(env_obj) = server.get_mut("env").and_then(|e| e.as_object_mut()) {
                 for (_k, v) in env_obj.iter_mut() {
                     if let Some(s) = v.as_str() {
-                        if s.contains("/home/jb_remus") {
+                        if s.starts_with('/') && (s.contains("home") || s.contains("mnt")) {
                             let new_s = s.replace("/home/jb_remus", &home_str);
                             *v = Value::String(new_s);
                         }
@@ -57,15 +57,26 @@ pub fn normalize_mcp_config(
 }
 
 pub fn list_mcp_servers(home_override: Option<String>) -> Result<()> {
-    let home = get_home_dir(home_override)?;
+    let home = get_home_dir(home_override.clone())?;
+    // ~/.config/claude-code/claude_desktop_config.json
     let config_path = home.join(".config").join("claude-code").join("claude_desktop_config.json");
 
     if !config_path.exists() {
+        // İkinci bir lokasyon kontrolü (bazı sistemlerde farklıdır)
+        let alt_path = home.join("AppData").join("Roaming").join("Claude").join("claude_desktop_config.json");
+        if alt_path.exists() {
+            println!("{} MCP config found at {:?}", "✓".green(), alt_path);
+            return list_mcp_servers_from_path(&alt_path);
+        }
         println!("{} MCP config file not found at {:?}", "✗".red(), config_path);
         return Ok(());
     }
 
-    let config = load_mcp_config(&config_path)?;
+    list_mcp_servers_from_path(&config_path)
+}
+
+fn list_mcp_servers_from_path(path: &PathBuf) -> Result<()> {
+    let config = load_mcp_config(path)?;
     println!("{}", "Configured MCP Servers".cyan().bold());
     println!("========================================");
     for (name, server) in &config.mcp_servers {
@@ -78,6 +89,5 @@ pub fn list_mcp_servers(home_override: Option<String>) -> Result<()> {
     }
     println!("========================================");
     println!("Total servers: {}", config.mcp_servers.len().to_string().yellow().bold());
-
     Ok(())
 }

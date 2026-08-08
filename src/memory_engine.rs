@@ -19,7 +19,8 @@ pub fn index_memory(home_override: Option<String>) -> Result<()> {
     let knowledge_dir = home.join("claude_global_memory").join("knowledge");
 
     if !knowledge_dir.exists() {
-        println!("{} Global memory directory not found at {:?}", "✗".red(), knowledge_dir);
+        // Otomatik oluşturma veya uyarı
+        println!("{} Memory directory missing, skipping index: {:?}", "⚠".yellow(), knowledge_dir);
         return Ok(());
     }
 
@@ -72,9 +73,10 @@ pub fn index_memory(home_override: Option<String>) -> Result<()> {
 pub fn search_memory(query: &str, home_override: Option<String>) -> Result<()> {
     let db_path = get_db_path(home_override.clone())?;
     if !db_path.exists() {
-        index_memory(home_override.clone())?;
+        println!("{} Memory database not found, run memory-index first.", "⚠".yellow());
+        return Ok(());
     }
-
+    
     let conn = Connection::open(&db_path)?;
     let search_pattern = format!("%{}%", query);
 
