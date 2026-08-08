@@ -1,29 +1,37 @@
-# Claude Code Complete Setup (Rust Engine)
+# Claude Code Complete Setup (100% Rust Engine)
 
-A high-performance, single-binary Rust-based deployment system for Claude Code that automates configuration, toolchain setup, MCP server management, and security auditing.
+A high-performance, single-binary **100% Rust-native** deployment and management system for **Claude Code**.
 
-## 🚀 Key Advantages
-- **Native Rust Engine:** Runs without Bash or external shell dependencies.
-- **Dynamic Path Normalization:** Auto-rewrites paths to match your local environment.
-- **SQLite Memory Indexing:** Fast keyword search across your knowledge base.
-- **Automated Security:** Pre-commit hooks & branch protection built-in.
+All legacy Bash (`.sh`) and Python (`.py`) scripts have been completely removed and refactored into a unified Rust CLI tool (`claude-code-setup.exe`).
 
-## 📦 Installation
-1. Build: `cargo build --release`
-2. Install: `./target/release/claude-code-setup.exe install`
+## 🚀 Key Differences from Upstream
+
+1. **100% Pure Rust Architecture:** Zero dependencies on Shell scripts or Python runtimes.
+2. **Dynamic Path Normalization:** Hardcoded paths (`/home/jb_remus`) auto-resolve to the target local environment.
+3. **SQLite-Backed Fast Memory Engine:** Embedded SQLite database indexes Markdown notes for instant keyword search.
+4. **Built-in Security & Autonomous Workflow:** Branch protection and pre-commit hooks run directly via Rust.
+
+## 📦 Building & Usage
+```bash
+# Build binary
+cargo build --release
+
+# Run automated setup
+./target/release/claude-code-setup.exe install
+
+# Run diagnostic verification
+./target/release/claude-code-setup.exe test
+```
 
 ## 🛠️ CLI Commands
 
 | Command | Description |
 | :--- | :--- |
-| `install` | Full setup & configuration |
-| `update` | Update existing setup |
-| `test` | Verify deployment diagnostics |
-| `mcp-list` | List MCP servers |
-| `memory-index`| Index memory notes |
-| `memory-search <q>`| Search memory |
-| `security-audit`| Audit security/Git state |
-
-## 🛡️ Security
-- **Branch Protection:** Enforces feature-branch workflows.
-- **Secret Scanner:** Prevents API key leakage.
+| `install` | Full automated setup & configuration |
+| `update` | Update existing configurations |
+| `test` | Run diagnostic verification suite |
+| `mcp-list` | List and inspect configured MCP servers |
+| `memory-index`| Index memory notes into SQLite |
+| `memory-search <q>`| Instant full-text search across knowledge base |
+| `security-audit`| Audit permissions & Git branch security |
+| `agent-workflow`| Execute autonomous repository branch workflow |

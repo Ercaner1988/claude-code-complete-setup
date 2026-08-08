@@ -1,3 +1,5 @@
+mod agent;
+mod branch_manager;
 mod cli;
 mod installer;
 mod mcp;
@@ -37,6 +39,9 @@ fn main() -> Result<()> {
         }
         Commands::SecurityAudit { home_dir } => {
             security::run_security_audit(home_dir)?;
+        }
+        Commands::AgentWorkflow { branch_type, description, files } => {
+            agent::run_agent_workflow(&branch_type, &description, &files)?;
         }
         Commands::Status => {
             tester::run_tests(None)?;

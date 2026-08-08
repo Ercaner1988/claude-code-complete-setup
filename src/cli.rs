@@ -64,6 +64,18 @@ pub enum Commands {
         home_dir: Option<String>,
     },
 
+    /// Execute autonomous repository manager workflow
+    AgentWorkflow {
+        #[arg(short, long, default_value = "feature", help = "Branch type prefix")]
+        branch_type: String,
+
+        #[arg(short, long, help = "Workflow description")]
+        description: String,
+
+        #[arg(short, long, help = "Files to commit")]
+        files: Vec<String>,
+    },
+
     /// Display environment status summary
     Status,
 }
