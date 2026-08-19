@@ -43,3 +43,44 @@ Kabul kriteri: elle eklenmiş bilinmeyen alan `mcp-set`/`mcp-unset` sonrası KOR
 
 ## Teslim
 `cargo build --release` temiz + `cargo test` geçer + PR/diff. Claude diff'i inceler: ponytail korkulukları, MCP Value-koruma, secret/yol işleme.
+
+---
+---
+
+# TUR 2 — Denetim sonrası düzeltme + kalite
+
+Tur 1 (`56596f8`) **kabul edildi**: binary derleniyor, model iniyor, 2 test geçiyor.
+Doğru yapılmış (KORU, geri alma): Value-tabanlı MCP düzenleme · `.bak` + atomik yazım · `disabled` bayrağı · `resolve_config_path` · `embedding BLOB` + `note_edges` aynı DB'de · FTS5 tablosu · kosinüs/wikilink/semantik kenar · BFS · 2 test. `McpServerConfig` struct'ını silip tamamen `Value`'ya geçmen direktiften sapmaydı ama **daha doğru** — öyle kalsın.
+
+Aşağıdakiler denetimde bulundu. Ercan kapsamı onayladı: **A (kusurlar) + B (kalite), hepsi.**
+
+## ÖNCE YANITLA (kod yazmadan)
+**Özellik 3 nerede?** `src/security.rs::run_security_audit` hâlâ salt-rapor; `56596f8`'de yalnız rustfmt değişikliği var. "Hallettik" denen oto-fix hangi dalda/repoda kaldı? Varsa main'e getir; yoksa kayıp demektir → ayrı iş olarak planlanacak. **Bu turda oto-fix YAZMA.**
+
+## A. Gerçek kusurlar
+**A1 — Sahte hybrid, üstelik varsayılan.** `search_hybrid()` doğrudan `search_semantic()` çağırıyor; `--mode` varsayılanı `"hybrid"`. Yani `memory-search X` saf semantik, FTS5 ölü.
+→ `search_keyword`/`search_semantic` **yazdırmayı bıraksın**, `Vec<(filename, title, score)>` döndürsün; tek `render()` bassın (yazdırma tekrarını da siler). Hybrid = **RRF** (`k=60`, `Σ 1/(k+rank)`), ~30 satır, yeni bağımlılık yok.
+
+**A2 — FTS5 hatası sessizce yutuluyor.** `if let Ok(rows) = rows` → `-`, `"`, `*`, `:` içeren sorgu sözdizim hatası verir, kullanıcı hata yerine **"0 sonuç"** görür (sessiz yanlış cevap).
+→ Hatayı `?` ile yükselt + sorguyu kaçır: her sözcüğü çift tırnağa al, boşlukla birleştir (`foo-bar baz` → `"foo-bar" "baz"`).
+
+**A3 — `mcp-unset <server>` bayraksız çağrılırsa sunucuyu tümüyle siliyor.** Yıkıcı varsayılan.
+→ Tam silme **`--remove` bayrağı** şart olsun; bayraksız+alansız çağrıda açıklayıcı hata döndür.
+
+## B. Kalite
+**B1 — Chunking yok** (bge-small ~512 token; uzun not sessizce kesiliyor) → içeriği ~1500 karakterlik pencerelere böl, her parçayı göm, **ortalamasını al** (mean-pool). Şema değişmez.
+**B2 — Eşikler gömülü** → `memory-index --edge-threshold` (0.70), `memory-search --limit` (5) `--min-score` (0.30).
+**B3 — Hayalet wikilink kenarı** (`[[X]]` var olmayan nota) → indekslemede dosya adlarının `HashSet`'ini topla, yalnız var olan hedefe kenar yaz, atlananların sayısını bildir.
+**B4 — Ölü `/mnt/` dalı**: guard geçiyor ama `replace` yalnız `/home/jb_remus` → no-op. `/mnt/` guard'ını **sil** (silme > ekleme).
+**B5 — Wikilink testi yok** → regex'i saf fonksiyona çıkar (`fn extract_wikilinks(content: &str) -> Vec<String>`) ve test et.
+
+## Korkuluklar (değişmedi)
+Tek-implementasyonlu soyutlama yok · ANN/graph DB/vektör-sunucu yok · **yeni bağımlılık yok** (RRF/kaçırma/chunking hepsi stdlib) · `get_home_dir` + `resolve_config_path` + Value deseni yeniden kullanılır · Value-tabanlı MCP düzenlemesi tipli-struct'a **geri döndürülmez**.
+
+## Tur 2 kabul kriterleri
+- `cargo test`: kosinüs · **wikilink ayrıştırma (yeni)** · MCP Value-koruma · **FTS5 kaçırma (yeni)** · **RRF sıralaması (yeni)**.
+- `memory-search "foo-bar"` sessizce 0 dönmez (hata ya da sonuç).
+- Varsayılan `hybrid` hem keyword hem semantik isabet gösterir; `--keyword`/`--semantic` ayrı çalışır.
+- `[[yok-boyle-not]]` içeren not → `memory-related` onu listelemez, atlanan kenar sayısı raporlanır.
+- 512 token'ı aşan not indekslenir; sonundaki içerikle de semantik olarak bulunur (mean-pool çalışıyor).
+- `mcp-unset srv` (bayraksız) reddeder; `--remove` siler + `.bak` oluşur; `mcp-set` sonrası bilinmeyen alan korunur.
