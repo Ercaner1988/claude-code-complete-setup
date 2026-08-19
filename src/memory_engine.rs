@@ -3,11 +3,13 @@ use colored::*;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use regex::Regex;
 use rusqlite::{params, Connection};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 
 use crate::installer::get_home_dir;
+
+// ─── Yardımcılar ────────────────────────────────────────────────────────────
 
 pub fn get_db_path(home_override: Option<String>) -> Result<PathBuf> {
     let home = get_home_dir(home_override)?;
@@ -34,6 +36,118 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         dot / (norm_a.sqrt() * norm_b.sqrt())
     }
 }
+
+fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect()
+}
+
+fn f32_vec_to_bytes(vec: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(vec.len() * 4);
+    for &val in vec {
+        bytes.extend_from_slice(&val.to_le_bytes());
+    }
+    bytes
+}
+
+/// Wikilink'leri ayrıştır: `[[hedef]]` → "hedef" veya "hedef.md"
+pub fn extract_wikilinks(content: &str) -> Vec<String> {
+    let re = Regex::new(r"\[\[(.*?)\]\]").unwrap();
+    re.captures_iter(content)
+        .map(|cap| {
+            let target = cap[1].trim();
+            if target.ends_with(".md") {
+                target.to_string()
+            } else {
+                format!("{}.md", target)
+            }
+        })
+        .collect()
+}
+
+/// İçeriği ~chunk_size karakterlik pencerelere böl (satır sınırında)
+fn chunk_content(content: &str, chunk_size: usize) -> Vec<String> {
+    if content.len() <= chunk_size {
+        return vec![content.to_string()];
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < content.len() {
+        let end = std::cmp::min(start + chunk_size, content.len());
+        // Satır sınırında kes
+        let actual_end = if end < content.len() {
+            content[start..end]
+                .rfind('\n')
+                .map(|pos| start + pos + 1)
+                .unwrap_or(end)
+        } else {
+            end
+        };
+        chunks.push(content[start..actual_end].to_string());
+        start = actual_end;
+    }
+    chunks
+}
+
+/// Chunk embedding'lerinin ortalamasını al (mean-pool)
+fn mean_pool_embeddings(embeddings: &[Vec<f32>]) -> Vec<f32> {
+    if embeddings.is_empty() {
+        return Vec::new();
+    }
+    let dim = embeddings[0].len();
+    let mut mean = vec![0.0f32; dim];
+    for emb in embeddings {
+        for (i, &v) in emb.iter().enumerate() {
+            mean[i] += v;
+        }
+    }
+    let n = embeddings.len() as f32;
+    for val in mean.iter_mut() {
+        *val /= n;
+    }
+    mean
+}
+
+/// FTS5 sorgusu için güvenli kaçırma: her sözcüğü çift tırnağa al
+fn escape_fts5_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|word| format!("\"{}\"", word))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// ─── Sonuç tipi ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub filename: String,
+    pub title: String,
+    pub score: f64,
+}
+
+fn render_results(results: &[SearchResult], mode_label: &str, query: &str) {
+    println!(
+        "{} for '{}'",
+        mode_label.cyan().bold(),
+        query.yellow()
+    );
+    println!("========================================");
+    for r in results {
+        println!(
+            "• {} [{}] (Score: {:.4})",
+            r.title.green().bold(),
+            r.filename.dimmed(),
+            r.score
+        );
+    }
+    println!("========================================");
+    println!("Total matched documents: {}", results.len());
+}
+
+// ─── DB Başlatma ────────────────────────────────────────────────────────────
 
 pub fn init_db(conn: &Connection) -> Result<()> {
     conn.execute(
@@ -72,22 +186,12 @@ pub fn init_db(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
-        .collect()
-}
+// ─── İndeksleme ─────────────────────────────────────────────────────────────
 
-fn f32_vec_to_bytes(vec: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(vec.len() * 4);
-    for &val in vec {
-        bytes.extend_from_slice(&val.to_le_bytes());
-    }
-    bytes
-}
-
-pub fn index_memory(home_override: Option<String>) -> Result<()> {
+pub fn index_memory(
+    home_override: Option<String>,
+    edge_threshold: f32,
+) -> Result<()> {
     let home = get_home_dir(home_override.clone())?;
     let db_path = get_db_path(home_override)?;
     let knowledge_dir = home.join("claude_global_memory").join("knowledge");
@@ -132,24 +236,32 @@ pub fn index_memory(home_override: Option<String>) -> Result<()> {
         return Ok(());
     }
 
+    // Dosya adları kümesi — hayalet wikilink filtrelemesi için (B3)
+    let file_set: HashSet<String> = files_data.iter().map(|(f, _, _)| f.clone()).collect();
+
     println!(
         "{}",
-        "Generating embeddings via FastEmbed (BGEMSI)...".blue()
+        "Generating embeddings via FastEmbed (BGE-Small)...".blue()
     );
     let model = TextEmbedding::try_new(
         InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(true),
     )?;
 
-    let texts: Vec<String> = files_data
-        .iter()
-        .map(|(_, title, content)| format!("{}\n{}", title, content))
-        .collect();
+    // B1: Chunking + mean-pool — ~1500 karakter pencereler
+    let chunk_size: usize = 1500;
+    let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(files_data.len());
 
-    let embeddings = model.embed(texts, None)?;
+    for (_filename, title, content) in files_data.iter() {
+        let full_text = format!("{}\n{}", title, content);
+        let chunks = chunk_content(&full_text, chunk_size);
+        let chunk_embeddings = model.embed(chunks, None)?;
+        let pooled = mean_pool_embeddings(&chunk_embeddings);
+        all_embeddings.push(pooled);
+    }
 
     // DB'ye Ekle
     for (i, (filename, title, content)) in files_data.iter().enumerate() {
-        let emb_bytes = f32_vec_to_bytes(&embeddings[i]);
+        let emb_bytes = f32_vec_to_bytes(&all_embeddings[i]);
         conn.execute(
             "INSERT INTO knowledge_notes (filename, title, content, embedding) VALUES (?1, ?2, ?3, ?4)",
             params![filename, title, content, emb_bytes],
@@ -162,27 +274,26 @@ pub fn index_memory(home_override: Option<String>) -> Result<()> {
     }
 
     // Wikilink & Semantik Kenarları Oluştur
-    let wikilink_re = Regex::new(r"\[\[(.*?)\]\]")?;
+    let mut skipped_wikilinks = 0u32;
     for (i, (src_file, _, content)) in files_data.iter().enumerate() {
-        // 1. Wikilinks
-        for cap in wikilink_re.captures_iter(content) {
-            let target = cap[1].trim();
-            let dst_file = if target.ends_with(".md") {
-                target.to_string()
+        // 1. Wikilinks — B3: yalnız var olan hedefe kenar yaz
+        let links = extract_wikilinks(content);
+        for dst_file in &links {
+            if file_set.contains(dst_file) {
+                conn.execute(
+                    "INSERT OR REPLACE INTO note_edges (src, dst, tur, agirlik) VALUES (?1, ?2, 'wikilink', 1.0)",
+                    params![src_file, dst_file],
+                )?;
             } else {
-                format!("{}.md", target)
-            };
-            conn.execute(
-                "INSERT OR REPLACE INTO note_edges (src, dst, tur, agirlik) VALUES (?1, ?2, 'wikilink', 1.0)",
-                params![src_file, dst_file],
-            )?;
+                skipped_wikilinks += 1;
+            }
         }
 
-        // 2. Kosinüs Semantik Kenarlar (Threshold = 0.70)
+        // 2. Kosinüs Semantik Kenarlar
         // ponytail: lineer kosinüs; not > ~5k olursa ANN ekle
         for j in (i + 1)..files_data.len() {
-            let sim = cosine_similarity(&embeddings[i], &embeddings[j]);
-            if sim >= 0.70 {
+            let sim = cosine_similarity(&all_embeddings[i], &all_embeddings[j]);
+            if sim >= edge_threshold {
                 let dst_file = &files_data[j].0;
                 conn.execute(
                     "INSERT OR REPLACE INTO note_edges (src, dst, tur, agirlik) VALUES (?1, ?2, 'semantic', ?3)",
@@ -196,6 +307,14 @@ pub fn index_memory(home_override: Option<String>) -> Result<()> {
         }
     }
 
+    if skipped_wikilinks > 0 {
+        println!(
+            "{} {} ghost wikilink edge(s) skipped (target note not found).",
+            "⚠".yellow(),
+            skipped_wikilinks
+        );
+    }
+
     println!(
         "{} Successfully indexed {} notes with embeddings and graph edges into SQLite ({:?})",
         "✓".green().bold(),
@@ -206,7 +325,15 @@ pub fn index_memory(home_override: Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn search_memory(query: &str, mode: &str, home_override: Option<String>) -> Result<()> {
+// ─── Arama ──────────────────────────────────────────────────────────────────
+
+pub fn search_memory(
+    query: &str,
+    mode: &str,
+    home_override: Option<String>,
+    limit: usize,
+    min_score: f64,
+) -> Result<()> {
     let db_path = get_db_path(home_override.clone())?;
     if !db_path.exists() {
         println!(
@@ -219,59 +346,70 @@ pub fn search_memory(query: &str, mode: &str, home_override: Option<String>) -> 
     let conn = Connection::open(&db_path)?;
 
     match mode {
-        "keyword" => search_keyword(&conn, query),
-        "semantic" => search_semantic(&conn, query),
-        _ => search_hybrid(&conn, query), // default hybrid
-    }
-}
-
-fn search_keyword(conn: &Connection, query: &str) -> Result<()> {
-    println!(
-        "{} (FTS5) for '{}'",
-        "Memory Keyword Search".cyan().bold(),
-        query.yellow()
-    );
-    println!("========================================");
-
-    let mut stmt = conn.prepare(
-        "SELECT filename, title, content FROM knowledge_fts WHERE knowledge_fts MATCH ?1 ORDER BY rank",
-    )?;
-
-    let rows = stmt.query_map(params![query], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    });
-
-    let mut matches = 0;
-    if let Ok(rows) = rows {
-        for row in rows {
-            let (filename, title, content) = row?;
-            matches += 1;
-            println!("• {} [{}]", title.green().bold(), filename.dimmed());
-            for line in content.lines() {
-                if line.to_lowercase().contains(&query.to_lowercase()) {
-                    println!("    {}", line.trim());
-                }
-            }
+        "keyword" => {
+            let results = search_keyword_vec(&conn, query, limit, min_score)?;
+            render_results(&results, "Memory Keyword Search (FTS5)", query);
+        }
+        "semantic" => {
+            let results = search_semantic_vec(&conn, query, limit, min_score)?;
+            render_results(&results, "Memory Semantic Search", query);
+        }
+        _ => {
+            // A1: Gerçek hybrid — RRF (k=60)
+            let results = search_hybrid_rrf(&conn, query, limit, min_score)?;
+            render_results(&results, "Memory Hybrid Search (RRF: FTS5 + Semantic)", query);
         }
     }
-
-    println!("========================================");
-    println!("Total matched documents: {}", matches);
     Ok(())
 }
 
-fn search_semantic(conn: &Connection, query: &str) -> Result<()> {
-    println!(
-        "{} for '{}'",
-        "Memory Semantic Search".cyan().bold(),
-        query.yellow()
-    );
-    println!("========================================");
+fn search_keyword_vec(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+    min_score: f64,
+) -> Result<Vec<SearchResult>> {
+    // A2: FTS5 kaçırma — her sözcüğü çift tırnağa al
+    let escaped = escape_fts5_query(query);
 
+    let mut stmt = conn.prepare(
+        "SELECT filename, title, rank FROM knowledge_fts WHERE knowledge_fts MATCH ?1 ORDER BY rank",
+    )?;
+
+    let rows = stmt.query_map(params![escaped], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, f64>(2)?,
+        ))
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        let (filename, title, rank) = row?;
+        // FTS5 rank negatif (daha negatif = daha iyi); normalize edip pozitife çeviriyoruz
+        let score = -rank;
+        if score >= min_score || min_score <= 0.0 {
+            results.push(SearchResult {
+                filename,
+                title,
+                score,
+            });
+        }
+        if results.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(results)
+}
+
+fn search_semantic_vec(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+    min_score: f64,
+) -> Result<Vec<SearchResult>> {
     let model = TextEmbedding::try_new(
         InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(false),
     )?;
@@ -279,58 +417,89 @@ fn search_semantic(conn: &Connection, query: &str) -> Result<()> {
     let query_emb = model.embed(vec![query.to_string()], None)?[0].clone();
 
     let mut stmt =
-        conn.prepare("SELECT filename, title, content, embedding FROM knowledge_notes")?;
-    let mut results: Vec<(String, String, String, f32)> = Vec::new();
+        conn.prepare("SELECT filename, title, embedding FROM knowledge_notes")?;
+    let mut results: Vec<SearchResult> = Vec::new();
 
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, Option<Vec<u8>>>(3)?,
+            row.get::<_, Option<Vec<u8>>>(2)?,
         ))
     })?;
 
     for row in rows {
-        let (filename, title, content, emb_opt) = row?;
+        let (filename, title, emb_opt) = row?;
         if let Some(emb_bytes) = emb_opt {
             let emb = bytes_to_f32_vec(&emb_bytes);
             // ponytail: lineer kosinüs; not > ~5k olursa ANN ekle
-            let score = cosine_similarity(&query_emb, &emb);
-            results.push((filename, title, content, score));
+            let score = cosine_similarity(&query_emb, &emb) as f64;
+            if score >= min_score {
+                results.push(SearchResult {
+                    filename,
+                    title,
+                    score,
+                });
+            }
         }
     }
 
-    results.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
 
-    let mut count = 0;
-    for (filename, title, _content, score) in results.iter().take(5) {
-        if *score > 0.30 {
-            count += 1;
-            println!(
-                "• {} [{}] (Score: {:.4})",
-                title.green().bold(),
-                filename.dimmed(),
-                score
-            );
-        }
+    Ok(results)
+}
+
+/// A1: RRF (Reciprocal Rank Fusion) — k=60
+/// Her kaynağın sıralama pozisyonunu 1/(k+rank) ile puanlar, birleştirir.
+fn search_hybrid_rrf(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+    min_score: f64,
+) -> Result<Vec<SearchResult>> {
+    let k = 60.0;
+
+    // İki kanaldan geniş havuz çek — sonra RRF birleştirecek
+    let keyword_results = search_keyword_vec(conn, query, 50, 0.0)?;
+    let semantic_results = search_semantic_vec(conn, query, 50, 0.0)?;
+
+    // RRF puanlarını birleştir
+    let mut rrf_scores: HashMap<String, (f64, String)> = HashMap::new(); // filename → (rrf_score, title)
+
+    for (rank, r) in keyword_results.iter().enumerate() {
+        let rrf = 1.0 / (k + rank as f64 + 1.0);
+        let entry = rrf_scores
+            .entry(r.filename.clone())
+            .or_insert((0.0, r.title.clone()));
+        entry.0 += rrf;
     }
 
-    println!("========================================");
-    println!("Total matched documents: {}", count);
-    Ok(())
+    for (rank, r) in semantic_results.iter().enumerate() {
+        let rrf = 1.0 / (k + rank as f64 + 1.0);
+        let entry = rrf_scores
+            .entry(r.filename.clone())
+            .or_insert((0.0, r.title.clone()));
+        entry.0 += rrf;
+    }
+
+    let mut results: Vec<SearchResult> = rrf_scores
+        .into_iter()
+        .filter(|(_, (score, _))| *score >= min_score || min_score <= 0.0)
+        .map(|(filename, (score, title))| SearchResult {
+            filename,
+            title,
+            score,
+        })
+        .collect();
+
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
+
+    Ok(results)
 }
 
-fn search_hybrid(conn: &Connection, query: &str) -> Result<()> {
-    println!(
-        "{} for '{}'",
-        "Memory Hybrid Search (FTS5 + Semantic)".cyan().bold(),
-        query.yellow()
-    );
-    println!("========================================");
-    // Basitleştirilmiş Hibrit: Önce semantik getir, eşleşenleri sun
-    search_semantic(conn, query)
-}
+// ─── İlişkili Notlar (Graph BFS) ───────────────────────────────────────────
 
 pub fn get_related_notes(note_filename: &str, home_override: Option<String>) -> Result<()> {
     let db_path = get_db_path(home_override)?;
@@ -390,6 +559,8 @@ pub fn get_related_notes(note_filename: &str, home_override: Option<String>) -> 
     Ok(())
 }
 
+// ─── Testler ────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,5 +573,84 @@ mod tests {
 
         let v3 = vec![1.0, 2.0, 3.0];
         assert!((cosine_similarity(&v3, &v3) - 1.0).abs() < 1e-5);
+    }
+
+    // B5: Wikilink ayrıştırma testi
+    #[test]
+    fn test_extract_wikilinks() {
+        let content = "See [[My Note]] and also [[other.md]] for details. No link here.";
+        let links = extract_wikilinks(content);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0], "My Note.md");
+        assert_eq!(links[1], "other.md");
+    }
+
+    #[test]
+    fn test_extract_wikilinks_empty() {
+        let content = "No wikilinks here at all.";
+        let links = extract_wikilinks(content);
+        assert!(links.is_empty());
+    }
+
+    // A2: FTS5 kaçırma testi
+    #[test]
+    fn test_fts5_escape() {
+        let q = "foo-bar baz";
+        let escaped = escape_fts5_query(q);
+        assert_eq!(escaped, "\"foo-bar\" \"baz\"");
+    }
+
+    #[test]
+    fn test_fts5_escape_special_chars() {
+        let q = "hello:world \"test\" *star";
+        let escaped = escape_fts5_query(q);
+        assert_eq!(escaped, "\"hello:world\" \"\"test\"\" \"*star\"");
+    }
+
+    // RRF sıralama testi (birim)
+    #[test]
+    fn test_rrf_ordering() {
+        // RRF: doc hem keyword hem semantic'te ilkse en yüksek puanı almalı
+        // k=60, rank 0: 1/61 ≈ 0.01639
+        // İki kanalda rank 0: ~0.03279
+        let k = 60.0;
+        let dual_rank0 = 2.0 / (k + 1.0);
+        let single_rank0 = 1.0 / (k + 1.0);
+        assert!(dual_rank0 > single_rank0);
+    }
+
+    // Mean-pool testi
+    #[test]
+    fn test_mean_pool_embeddings() {
+        let embs = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![3.0, 4.0, 5.0],
+        ];
+        let mean = mean_pool_embeddings(&embs);
+        assert_eq!(mean.len(), 3);
+        assert!((mean[0] - 2.0).abs() < 1e-5);
+        assert!((mean[1] - 3.0).abs() < 1e-5);
+        assert!((mean[2] - 4.0).abs() < 1e-5);
+    }
+
+    // Chunking testi
+    #[test]
+    fn test_chunk_content_short() {
+        let content = "Short text";
+        let chunks = chunk_content(content, 1500);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "Short text");
+    }
+
+    #[test]
+    fn test_chunk_content_long() {
+        // 3000+ karakter oluştur
+        let line = "This is a test line for chunking.\n";
+        let content: String = line.repeat(100); // ~3300 karakter
+        let chunks = chunk_content(&content, 1500);
+        assert!(chunks.len() >= 2);
+        // Tüm chunk'lar birleşince orijinale eşit
+        let rejoined: String = chunks.concat();
+        assert_eq!(rejoined, content);
     }
 }

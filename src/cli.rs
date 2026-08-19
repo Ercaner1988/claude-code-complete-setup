@@ -66,6 +66,10 @@ pub enum Commands {
         #[arg(long, help = "Clear all command arguments")]
         clear_args: bool,
 
+        /// Completely remove the server (required for deletion)
+        #[arg(long, help = "Completely remove the server from config")]
+        remove: bool,
+
         #[arg(long, help = "Custom home directory override")]
         home_dir: Option<String>,
     },
@@ -92,6 +96,10 @@ pub enum Commands {
     MemoryIndex {
         #[arg(long, help = "Custom home directory override")]
         home_dir: Option<String>,
+
+        /// Semantic edge threshold (default: 0.70)
+        #[arg(long, default_value_t = 0.70, help = "Cosine similarity threshold for semantic edges")]
+        edge_threshold: f32,
     },
 
     /// Search indexed global memory notes
@@ -106,6 +114,14 @@ pub enum Commands {
             help = "Search mode: keyword, semantic, hybrid"
         )]
         mode: String,
+
+        /// Maximum number of results (default: 5)
+        #[arg(short, long, default_value_t = 5, help = "Maximum results to return")]
+        limit: usize,
+
+        /// Minimum score threshold (default: 0.30)
+        #[arg(long, default_value_t = 0.30, help = "Minimum score threshold")]
+        min_score: f64,
 
         #[arg(long, help = "Custom home directory override")]
         home_dir: Option<String>,

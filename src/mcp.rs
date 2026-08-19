@@ -67,7 +67,7 @@ pub fn normalize_mcp_config(raw_json: &str, target_home: &Path) -> Result<String
             if let Some(env_obj) = server.get_mut("env").and_then(|e| e.as_object_mut()) {
                 for (_k, v) in env_obj.iter_mut() {
                     if let Some(s) = v.as_str() {
-                        if s.contains("/home/jb_remus") || s.contains("/mnt/") {
+                        if s.contains("/home/jb_remus") {
                             let new_s = s.replace("/home/jb_remus", &home_str);
                             *v = Value::String(new_s);
                         }
@@ -75,11 +75,11 @@ pub fn normalize_mcp_config(raw_json: &str, target_home: &Path) -> Result<String
                 }
             }
 
-            // args içindeki yollar (düzeltme: fırsat bulmuşken args taraması)
+            // args içindeki yollar
             if let Some(args_arr) = server.get_mut("args").and_then(|a| a.as_array_mut()) {
                 for v in args_arr.iter_mut() {
                     if let Some(s) = v.as_str() {
-                        if s.contains("/home/jb_remus") || s.contains("/mnt/") {
+                        if s.contains("/home/jb_remus") {
                             let new_s = s.replace("/home/jb_remus", &home_str);
                             *v = Value::String(new_s);
                         }
@@ -222,6 +222,7 @@ pub fn mcp_unset(
     server_name: &str,
     env_keys: Vec<String>,
     clear_args: bool,
+    remove: bool,
     home_override: Option<String>,
 ) -> Result<()> {
     let path = resolve_config_path(home_override)?;
@@ -236,36 +237,45 @@ pub fn mcp_unset(
         bail!("Server '{}' not found in config", server_name);
     }
 
-    if env_keys.is_empty() && !clear_args {
-        // Tamamen sunucuyu kaldır
+    // A3: Bayraksız çağrıda sunucuyu silme — --remove şart
+    if remove {
         servers.remove(server_name);
+        save_json_value_atomically(&path, &val)?;
         println!(
             "{} Removed server '{}' completely.",
             "✓".green().bold(),
             server_name
         );
-    } else {
-        let server_val = servers.get_mut(server_name).unwrap();
+        return Ok(());
+    }
 
-        if clear_args {
-            if let Some(obj) = server_val.as_object_mut() {
-                obj.remove("args");
-            }
-        }
-
-        if !env_keys.is_empty() {
-            if let Some(env_obj) = server_val.get_mut("env").and_then(|e| e.as_object_mut()) {
-                for k in env_keys {
-                    env_obj.remove(&k);
-                }
-            }
-        }
-        println!(
-            "{} Updated fields for server '{}'.",
-            "✓".green().bold(),
+    if env_keys.is_empty() && !clear_args {
+        bail!(
+            "No fields specified for server '{}'. Use --env or --clear-args to modify fields, or --remove to delete the server entirely.",
             server_name
         );
     }
+
+    let server_val = servers.get_mut(server_name).unwrap();
+
+    if clear_args {
+        if let Some(obj) = server_val.as_object_mut() {
+            obj.remove("args");
+        }
+    }
+
+    if !env_keys.is_empty() {
+        if let Some(env_obj) = server_val.get_mut("env").and_then(|e| e.as_object_mut()) {
+            for k in env_keys {
+                env_obj.remove(&k);
+            }
+        }
+    }
+    println!(
+        "{} Updated fields for server '{}'.",
+        "✓".green().bold(),
+        server_name
+    );
 
     save_json_value_atomically(&path, &val)?;
     Ok(())
@@ -344,6 +354,52 @@ mod tests {
         assert_eq!(val["mcpServers"]["custom_srv"]["env"]["FOO"], "bar");
 
         // .bak dosyası oluştu mu?
+        assert!(cfg_dir.join("claude_desktop_config.json.bak").exists());
+    }
+
+    #[test]
+    fn test_mcp_unset_without_remove_flag_rejects() {
+        let raw = r#"{"mcpServers": {"my_srv": {"command": "node"}}}"#;
+
+        let dir = tempdir().unwrap();
+        let cfg_dir = dir.path().join(".config").join("claude-code");
+        fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg_path = cfg_dir.join("claude_desktop_config.json");
+        fs::write(&cfg_path, raw).unwrap();
+
+        let home_override = Some(dir.path().to_string_lossy().to_string());
+
+        // A3: bayraksız çağrı reddedilmeli
+        let result = mcp_unset("my_srv", vec![], false, false, home_override.clone());
+        assert!(result.is_err());
+
+        // Sunucu hâlâ yerinde olmalı
+        let val: Value =
+            serde_json::from_str(&fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        assert!(val["mcpServers"]["my_srv"].is_object());
+    }
+
+    #[test]
+    fn test_mcp_unset_with_remove_flag_deletes() {
+        let raw = r#"{"mcpServers": {"my_srv": {"command": "node", "custom_field": 42}}}"#;
+
+        let dir = tempdir().unwrap();
+        let cfg_dir = dir.path().join(".config").join("claude-code");
+        fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg_path = cfg_dir.join("claude_desktop_config.json");
+        fs::write(&cfg_path, raw).unwrap();
+
+        let home_override = Some(dir.path().to_string_lossy().to_string());
+
+        // --remove ile sil
+        mcp_unset("my_srv", vec![], false, true, home_override.clone()).unwrap();
+
+        // Sunucu silinmiş olmalı
+        let val: Value =
+            serde_json::from_str(&fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        assert!(val["mcpServers"]["my_srv"].is_null());
+
+        // .bak oluşmuş olmalı
         assert!(cfg_dir.join("claude_desktop_config.json.bak").exists());
     }
 }

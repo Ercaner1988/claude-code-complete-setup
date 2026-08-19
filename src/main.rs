@@ -44,9 +44,10 @@ fn main() -> Result<()> {
             server,
             env,
             clear_args,
+            remove,
             home_dir,
         } => {
-            mcp::mcp_unset(&server, env, clear_args, home_dir)?;
+            mcp::mcp_unset(&server, env, clear_args, remove, home_dir)?;
         }
         Commands::McpEnable { server, home_dir } => {
             mcp::mcp_toggle(&server, false, home_dir)?;
@@ -54,15 +55,20 @@ fn main() -> Result<()> {
         Commands::McpDisable { server, home_dir } => {
             mcp::mcp_toggle(&server, true, home_dir)?;
         }
-        Commands::MemoryIndex { home_dir } => {
-            memory_engine::index_memory(home_dir)?;
+        Commands::MemoryIndex {
+            home_dir,
+            edge_threshold,
+        } => {
+            memory_engine::index_memory(home_dir, edge_threshold)?;
         }
         Commands::MemorySearch {
             query,
             mode,
+            limit,
+            min_score,
             home_dir,
         } => {
-            memory_engine::search_memory(&query, &mode, home_dir)?;
+            memory_engine::search_memory(&query, &mode, home_dir, limit, min_score)?;
         }
         Commands::MemoryRelated { note, home_dir } => {
             memory_engine::get_related_notes(&note, home_dir)?;
